@@ -165,11 +165,11 @@ func (r *Repo) checkoutRevision(revision string) error {
 		}
 	}
 
-	coCmd := exec.Command("git", "-C", r.getCloneDir(), "checkout", newHash.String())
+	coCmd := exec.Command("git", "--git-dir", r.getCloneDir() + ".git", "checkout", newHash.String())
 	err = coCmd.Run()
 	if err != nil {
 		//try force in the (unlikely) case that something went wrong
-		coCmd = exec.Command("git", "-C", r.getCloneDir(), "checkout", "-f", newHash.String())
+		coCmd = exec.Command("git", "--git-dir", r.getCloneDir() + ".git", "checkout", "-f", newHash.String())
 		err = coCmd.Run()
 		if err != nil {
 			return err
