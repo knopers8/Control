@@ -181,11 +181,11 @@ func MakeConfigAndRepoAccessFuncs(confSvc ConfigurationService, varStack map[str
 				// Only generate new tasks & workflows if the files don't exist
 				// If they exist, hash comparison guarantees validity
 				if _, err = os.Stat(filepath.Join(workflowRepo.GetCloneDir(), "workflows", jitWorkflowName+ ".yaml")); err == nil {
-					log.Tracef("Workflow %s already exists, skipping DPL creation", jitWorkflowName)
+					log.Debugf("Workflow %s already exists, skipping DPL creation", jitWorkflowName)
 					return jitWorkflowName
 				}
 
-				log.Trace("Resolved DPL command: " + dplCommand)
+				log.Debug("Resolved DPL command: " + dplCommand)
 
 				// TODO: Before executing we need to check that this is a valid dpl command
 				// If not, any command may be injected on the aliecs host
@@ -197,7 +197,7 @@ func MakeConfigAndRepoAccessFuncs(confSvc ConfigurationService, varStack map[str
 				dplCmd.Dir = workflowRepo.GetCloneDir()
 				var dplOut []byte
 				dplOut, err = dplCmd.CombinedOutput()
-				log.Trace("DPL command out: " + string(dplOut))
+				log.Debug("DPL command out: " + string(dplOut))
 				if err != nil {
 					return fmt.Sprintf("Failed to run DPL command : " + err.Error() + "\nDPL command out : " + string(dplOut))
 				}
