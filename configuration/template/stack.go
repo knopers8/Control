@@ -190,7 +190,7 @@ func MakeConfigAndRepoAccessFuncs(confSvc ConfigurationService, varStack map[str
 				// TODO: Before executing we need to check that this is a valid dpl command
 				// If not, any command may be injected on the aliecs host
 				// since this will be run as user `aliecs` it might not pose a problem at this point
-				cmdString := dplCommand + " --o2-control " + jitWorkflowName
+				cmdString := "source /etc/profile.d/o2.sh && " + dplCommand + " --o2-control " + jitWorkflowName
 				dplCmd := exec.Command("bash", "-c", cmdString)
 
 				// execute the DPL command in the repo of the workflow used
