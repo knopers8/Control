@@ -85,7 +85,6 @@ func fillBuildFromGit(localRepoPath string) {
 	BUILD = h.String()[:7]
 }
 
-
 func init() {
 	// If the core was built with go build directly instead of make.
 	if VERSION_MAJOR == "0" &&
@@ -103,22 +102,22 @@ func init() {
 		fillBuildFromGit(basePath)
 	}
 
-	VERSION          = strings.Join([]string{VERSION_MAJOR, VERSION_MINOR, VERSION_PATCH}, ".")
-	VERSION_SHORT    = VERSION
-	VERSION_BUILD    = strings.Join([]string{VERSION, BUILD}, "-")
+	VERSION = strings.Join([]string{VERSION_MAJOR, VERSION_MINOR, VERSION_PATCH}, ".")
+	VERSION_SHORT = VERSION
+	VERSION_BUILD = strings.Join([]string{VERSION, BUILD}, "-")
 }
 
 var ( // Acquired from -ldflags="-X=..." in Makefile
-	VERSION_MAJOR    = "0"
-	VERSION_MINOR    = "0"
-	VERSION_PATCH    = "0"
-	BUILD            = ""
+	VERSION_MAJOR = "0"
+	VERSION_MINOR = "0"
+	VERSION_PATCH = "0"
+	BUILD         = ""
 )
 
 var (
 	NAME             = "aliecs"
 	PRETTY_SHORTNAME = "AliECS"
-	PRETTY_FULLNAME  = "ALICE Experiment Control System"
+	PRETTY_FULLNAME  = "ALICE Experiment Control System [pvv 24-Jan-2022]"
 	VERSION          string
 	VERSION_SHORT    string
 	VERSION_BUILD    string
