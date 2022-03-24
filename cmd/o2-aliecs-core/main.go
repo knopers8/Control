@@ -25,6 +25,7 @@
 package main
 
 import (
+	"github.com/AliceO2Group/Control/core/integration/kafka"
 	"os"
 
 	"github.com/AliceO2Group/Control/common/logger/infologger"
@@ -54,6 +55,10 @@ func init() {
 		"ddsched",
 		"ddSchedulerEndpoint",
 		ddsched.NewPlugin)
+	integration.RegisterPlugin(
+		"kafka",
+		"kafkaBroker",
+		kafka.NewPlugin)
 	integration.RegisterPlugin(
 		"odc",
 		"odcEndpoint",

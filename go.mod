@@ -37,6 +37,7 @@ require (
 	github.com/briandowns/spinner v1.12.0
 	github.com/census-instrumentation/opencensus-proto v0.3.0 // indirect
 	github.com/cncf/udpa/go v0.0.0-20210210032658-bff43e8824d0 // indirect
+	github.com/confluentinc/confluent-kafka-go v1.8.2
 	github.com/coreos/bbolt v1.3.4 // indirect
 	github.com/coreos/etcd v3.3.25+incompatible // indirect
 	github.com/coreos/go-systemd v0.0.0-20191104093116-d3cd4ed1dbcf // indirect
@@ -55,7 +56,7 @@ require (
 	github.com/go-gl/glfw/v3.3/glfw v0.0.0-20201108214237-06ea97f0c265 // indirect
 	github.com/go-yaml/yaml v2.1.0+incompatible // indirect
 	github.com/gobwas/glob v0.2.3
-	github.com/golang/protobuf v1.4.3
+	github.com/golang/protobuf v1.5.2
 	github.com/google/uuid v1.2.0
 	github.com/gopherjs/gopherjs v0.0.0-20200217142428-fce0ec30dd00 // indirect
 	github.com/gorilla/mux v1.7.3
@@ -142,7 +143,7 @@ require (
 	google.golang.org/grpc v1.35.0
 	google.golang.org/grpc/cmd/protoc-gen-go-grpc v1.1.0
 	google.golang.org/grpc/examples v0.0.0-20210210183804-ad24ab52b162 // indirect
-	google.golang.org/protobuf v1.25.0
+	google.golang.org/protobuf v1.26.0
 	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c // indirect
 	gopkg.in/ini.v1 v1.62.0 // indirect
 	gopkg.in/osteele/liquid.v1 v1.2.4 // indirect
