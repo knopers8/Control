@@ -78,6 +78,23 @@ type ConfigurationService interface {
 	SetRuntimeEntry(component string, key string, value string) error
 }
 
+// Execute processes all fields in the Sequence through multiple stages.
+// It applies configuration and executes each field's logic in order.
+//
+// Parameters:
+//
+//	confSvc: Configuration service for retrieving component configurations
+//	parentPath: Path of the parent component in the configuration hierarchy
+//	varStack: Stack of variables available for template expansion
+//	buildObjectStack: Function to build the object stack for each stage
+//	baseConfigStack: Base configuration settings
+//	stringTemplateCache: Cache for parsed string templates
+//	workflowRepo: Accessor to the workflow repository
+//	stageCallback: Callback function executed after each stage
+//
+// Returns:
+//
+//	error: Any error encountered during execution, or nil if successful
 func (sf Sequence) Execute(confSvc ConfigurationService,
 	parentPath string,
 	varStack VarStack,
@@ -228,6 +245,26 @@ func (vs *VarStack) consolidated(stage Stage) (consolidatedStack map[string]stri
 	return
 }
 
+// fixme: review this once understood
+
+// Execute iterates through predefined stages, handling field execution,
+// variable consolidation, and error management. It supports role-based execution
+// and provides detailed logging for debugging purposes.
+// Arguments:
+//
+//	confSvc ConfigurationService: Service for retrieving configuration data
+//	parentPath string: Path representing the parent in the configuration hierarchy
+//	varStack VarStack: Stack of variables for different stages
+//	buildObjectStack BuildObjectStackFunc: Function to build object stack for each stage
+//	baseConfigStack map[string]string: Base configuration settings
+//	stringTemplateCache map[string]Template: Cache for string templates
+//	workflowRepo repos.IRepo: Repository interface for workflow-related operations
+//	stageCallback StageCallbackFunc: Callback function executed after processing each stage
+//	fields ...Field: Variadic list of Field interfaces to be processed
+//
+// Returns:
+//
+//	error: Any error encountered during execution, or nil if successful
 func (fields Fields) Execute(confSvc ConfigurationService, parentPath string, varStack map[string]string, objStack map[string]interface{}, baseConfigStack map[string]string, stringTemplateCache map[string]template.Template, workflowRepo repos.IRepo) (err error) {
 	environment := make(map[string]interface{}, len(varStack))
 	strOpStack := MakeUtilFuncMap(varStack)
