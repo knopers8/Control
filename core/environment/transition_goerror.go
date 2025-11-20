@@ -25,8 +25,10 @@
 package environment
 
 import (
+	"github.com/AliceO2Group/Control/core/controlcommands"
 	"github.com/AliceO2Group/Control/core/task"
 	"github.com/AliceO2Group/Control/core/task/sm"
+	"github.com/iancoleman/strcase"
 )
 
 func NewGoErrorTransition(taskman *task.Manager) Transition {
@@ -44,6 +46,29 @@ type GoErrorTransition struct {
 
 func (t GoErrorTransition) do(env *Environment) (err error) {
 
+	args := controlcommands.PropertyMap{}
+	// Get a handle to the consolidated var stack of the root role of the env's workflow
+	if wf := env.Workflow(); wf != nil {
+		if cvs, cvsErr := wf.ConsolidatedVarStack(); cvsErr == nil {
+			// in principle, only stable beams end should change among fill info vars in a typical scenario,
+			// but just in case of more creative uses, we push all of them again.
+			for _, key := range []string{
+				"fill_info_fill_number",
+				"fill_info_filling_scheme",
+				"fill_info_beam_type",
+				"fill_info_stable_beams_start_ms",
+				"fill_info_stable_beams_end_ms",
+				"run_end_time_ms",
+			} {
+				if value, ok := cvs[key]; ok {
+					// we push the above parameters with both camelCase and snake_case identifiers for convenience
+					args[strcase.ToLowerCamel(key)] = value
+					args[key] = value
+				}
+			}
+		}
+	}
+
 	// we stop all tasks which are in RUNNING
 	toStop := env.Workflow().GetTasks().Filtered(func(t *task.Task) bool {
 		t.SetSafeToStop(true)
@@ -55,7 +80,7 @@ func (t GoErrorTransition) do(env *Environment) (err error) {
 			sm.RUNNING.String(),
 			sm.STOP.String(),
 			sm.CONFIGURED.String(),
-			nil,
+			args,
 			env.Id(),
 		)
 		t.taskman.MessageChannel <- taskmanMessage
