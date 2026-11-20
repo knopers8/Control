@@ -34,6 +34,8 @@ import (
 
 	v1 "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -55,6 +57,7 @@ type EnvironmentReconciler struct {
 
 func (r *EnvironmentReconciler) runTasksFromReferenceOnNode(ctx context.Context, taskReferences []aliecsv1alpha1.TaskReference,
 	nodename string, resolvedNodename string, req ctrl.Request, environment *aliecsv1alpha1.Environment, log logr.Logger,
+	pending pendingPods,
 ) (*ctrl.Result, error) {
 	for _, taskReference := range taskReferences {
 
@@ -111,6 +114,13 @@ func (r *EnvironmentReconciler) runTasksFromReferenceOnNode(ctx context.Context,
 			task.Labels["taskID"] = taskReference.TaskID
 		}
 
+		if taskReference.PodGroup != "" {
+			// created together with the shared Pod in createSharedPods
+			containerName := strings.TrimPrefix(task.Name, strings.ToLower(nodename)+"-")
+			pending.add(podKey{node: nodename, resolvedNode: resolvedNodename, group: taskReference.PodGroup}, task, containerName)
+			continue
+		}
+
 		if err := controllerutil.SetControllerReference(environment, task, r.Scheme); err != nil {
 			log.Error(err, "failed to set controller reference", "task", task.Name)
 			return &ctrl.Result{}, err
@@ -157,6 +167,7 @@ func handleEnvVars(task *aliecsv1alpha1.Task, taskReference aliecsv1alpha1.TaskR
 
 func (r *EnvironmentReconciler) runTaskFromDefinitionOnNode(ctx context.Context, taskDefs []aliecsv1alpha1.TaskDefinition,
 	nodename string, resolvedNodename string, req ctrl.Request, environment *aliecsv1alpha1.Environment, log logr.Logger,
+	pending pendingPods,
 ) (*ctrl.Result, error) {
 	for _, taskDef := range taskDefs {
 		task := &aliecsv1alpha1.Task{}
@@ -182,6 +193,12 @@ func (r *EnvironmentReconciler) runTaskFromDefinitionOnNode(ctx context.Context,
 
 		task.Labels = labels(environment, nodename)
 
+		if taskDef.PodGroup != "" {
+			// created together with the shared Pod in createSharedPods
+			pending.add(podKey{node: nodename, resolvedNode: resolvedNodename, group: taskDef.PodGroup}, task, strings.ToLower(taskDef.Name))
+			continue
+		}
+
 		if err := controllerutil.SetControllerReference(environment, task, r.Scheme); err != nil {
 			log.Error(err, "failed to set controller reference", "task", task.Name)
 			return &ctrl.Result{}, err
@@ -200,6 +217,47 @@ func (r *EnvironmentReconciler) runTaskFromDefinitionOnNode(ctx context.Context,
 	return nil, nil
 }
 
+// createSharedPods builds and creates one Pod per (node, podGroup) and then the Tasks living in them.
+// The Pod has to exist in its final form before its Tasks, as Pods are (largely) immutable.
+func (r *EnvironmentReconciler) createSharedPods(ctx context.Context, environment *aliecsv1alpha1.Environment,
+	pending pendingPods, log logr.Logger,
+) (*ctrl.Result, error) {
+	for _, key := range pending.sortedKeys() {
+		tasks := pending[key]
+		pod, err := buildSharedPod(environment, key, tasks, r.Scheme)
+		if err != nil {
+			// a configuration problem, retrying won't help
+			log.Error(err, "failed to build shared pod", "node", key.node, "group", key.group)
+			meta.SetStatusCondition(&environment.Status.Conditions, metav1.Condition{
+				Type: "PodsCreated", Status: metav1.ConditionFalse, Reason: "InvalidPodGroup", Message: err.Error(),
+			})
+			// status.tasks is required by the CRD, a nil map would be sent as null and rejected
+			if environment.Status.Tasks == nil {
+				environment.Status.Tasks = make(map[string]map[string]string)
+			}
+			if uerr := r.Status().Update(ctx, environment); uerr != nil {
+				log.Error(uerr, "failed to update status")
+			}
+			return &ctrl.Result{}, nil
+		}
+		pod.Spec.NodeName = key.resolvedNode
+
+		log.Info("creating shared pod", "pod", pod.Name, "tasks", len(tasks))
+		if err := r.Create(ctx, pod); client.IgnoreAlreadyExists(err) != nil {
+			log.Error(err, "failed to create shared pod", "pod", pod.Name)
+			return &ctrl.Result{}, err
+		}
+
+		for _, pt := range tasks {
+			if err := r.Create(ctx, pt.task); client.IgnoreAlreadyExists(err) != nil {
+				log.Error(err, "failed to create task", "task", pt.task.Name)
+				return &ctrl.Result{}, err
+			}
+		}
+	}
+	return nil, nil
+}
+
 // create label to bunch tasks to the environment and node
 func labels(environment *aliecsv1alpha1.Environment, nodename string) map[string]string {
 	return map[string]string{
@@ -215,6 +273,7 @@ const environmentFinalizer = "aliecs.alice.cern/environment-finalizer"
 // +kubebuilder:rbac:groups=aliecs.alice.cern,resources=environments/finalizers,verbs=update
 // +kubebuilder:rbac:groups=aliecs.alice.cern,resources=tasktemplates,verbs=get;list;watch
 // +kubebuilder:rbac:groups=core,resources=nodes,verbs=get;list;watch
+// +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -258,6 +317,26 @@ func (r *EnvironmentReconciler) handleFinalizer(ctx context.Context, environment
 		return ctrl.Result{}, true, nil
 	}
 
+	// Tasks are gone (they tore their processes down via OCC), only now remove shared Pods
+	pods := &v1.PodList{}
+	if err := r.List(ctx, pods, client.InNamespace(environment.Namespace), client.MatchingLabels{
+		"environment": environment.Name, labelSharedPod: "true",
+	}); err != nil {
+		return ctrl.Result{}, true, err
+	}
+	if len(pods.Items) > 0 {
+		for i := range pods.Items {
+			if !pods.Items[i].DeletionTimestamp.IsZero() {
+				continue
+			}
+			if err := r.Delete(ctx, &pods.Items[i]); err != nil && !k8serrors.IsNotFound(err) {
+				return ctrl.Result{}, true, err
+			}
+		}
+		log.Info("waiting for shared pods to be deleted before removing environment", "remaining", len(pods.Items))
+		return ctrl.Result{}, true, nil
+	}
+
 	controllerutil.RemoveFinalizer(environment, environmentFinalizer)
 	return ctrl.Result{}, true, r.Update(ctx, environment)
 }
@@ -280,6 +359,7 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			return ctrl.Result{}, err
 		}
 
+		pending := pendingPods{}
 		for nodename, tasksReferences := range environment.TaskTemplates.Tasks {
 			log.Info("creating tasks for hostname from references", "hostname", nodename, "number of tasks", len(tasksReferences))
 			resolvedName, err := resolveNodeName(nodeNames, nodename)
@@ -287,7 +367,7 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 				return ctrl.Result{}, err
 			}
 
-			if res, err := r.runTasksFromReferenceOnNode(ctx, tasksReferences, nodename, resolvedName, req, environment, log); res != nil {
+			if res, err := r.runTasksFromReferenceOnNode(ctx, tasksReferences, nodename, resolvedName, req, environment, log, pending); res != nil {
 				return *res, err
 			}
 		}
@@ -299,9 +379,13 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 				return ctrl.Result{}, err
 			}
 
-			if res, err := r.runTaskFromDefinitionOnNode(ctx, taskTemplates, nodename, resolvedName, req, environment, log); res != nil {
+			if res, err := r.runTaskFromDefinitionOnNode(ctx, taskTemplates, nodename, resolvedName, req, environment, log, pending); res != nil {
 				return *res, err
 			}
+		}
+
+		if res, err := r.createSharedPods(ctx, environment, pending, log); res != nil {
+			return *res, err
 		}
 	}
 
@@ -413,6 +497,7 @@ func (r *EnvironmentReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&aliecsv1alpha1.Environment{}).
 		Owns(&aliecsv1alpha1.Task{}).
+		Owns(&v1.Pod{}).
 		Watches(&aliecsv1alpha1.TaskTemplate{}, handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, obj client.Object) []reconcile.Request {
 			return nil
 		})).

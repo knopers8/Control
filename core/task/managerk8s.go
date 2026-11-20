@@ -221,12 +221,16 @@ func (m *Manager) createK8sTaskEntries(envId uid.ID, descriptors Descriptors) ([
 	return entries, nil
 }
 
-const jitK8sBasePortStr = "jitK8sBasePort"
+const (
+	jitK8sBasePortStr = "jitK8sBasePort"
+	k8sPodGroupStr    = "k8sPodGroup"
+)
 
 func (m *Manager) buildK8sNodeTaskRefs(envId uid.ID, entries []k8sTaskEntry) (map[string][]v1alpha1.TaskReference, error) {
 	nodeToRefs := make(map[string][]v1alpha1.TaskReference)
 
 	portAllocator := newK8sPortAllocator(viper.GetUint16(jitK8sBasePortStr))
+	podGroup := viper.GetString(k8sPodGroupStr)
 	for _, e := range entries {
 		t := e.task
 		desc := e.desc
@@ -298,6 +302,7 @@ func (m *Manager) buildK8sNodeTaskRefs(envId uid.ID, entries []k8sTaskEntry) (ma
 			NameSuffix: nameSuffix,
 			ArgsCLI:    argsCLI,
 			Env:        cmdEnvToK8sEnvVars(cmd.Env),
+			PodGroup:   podGroup,
 		}
 		nodeToRefs[t.hostname] = append(nodeToRefs[t.hostname], ref)
 	}

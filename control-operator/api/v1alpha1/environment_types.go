@@ -37,6 +37,10 @@ import (
 type TaskDefinition struct {
 	Name string           `json:"name"`
 	Spec TaskTemplateSpec `json:"spec"`
+	// PodGroup, when non-empty, makes this Task share a Pod with other Tasks of the same
+	// Environment, node and PodGroup. When empty, the Task gets its own Pod.
+	// +optional
+	PodGroup string `json:"podGroup,omitempty"`
 }
 
 // EnvironmentSpec defines the desired state of Environment
@@ -85,6 +89,10 @@ type TaskReference struct {
 	Env            []v1.EnvVar       `json:"env"`
 	ArgsCLI        []string          `json:"argsCLI"`
 	ArgsTransition map[string]string `json:"argsTransition,omitempty"`
+	// PodGroup, when non-empty, makes this Task share a Pod with other Tasks of the same
+	// Environment, node and PodGroup. When empty, the Task gets its own Pod.
+	// +optional
+	PodGroup string `json:"podGroup,omitempty"`
 }
 
 type TemplateSpecification struct {

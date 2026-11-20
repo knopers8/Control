@@ -86,6 +86,13 @@ type TaskSpec struct {
 	// +kubebuilder:validation:Enum=standby;deployed;configured;running
 	State    string `json:"state,omitempty"` // this is the *requested* state, there are other states the task may end up in but cannot be requested
 	NodeName string `json:"nodeName,omitempty"`
+	// PodName, when set, means this Task runs as a container inside an existing shared Pod
+	// created by the Environment controller. The Task controller never creates or deletes that Pod.
+	// +optional
+	PodName string `json:"podName,omitempty"`
+	// ContainerName is the container of the shared Pod that runs this Task.
+	// +optional
+	ContainerName string `json:"containerName,omitempty"`
 }
 
 const (
@@ -102,6 +109,10 @@ type TaskStatus struct {
 	Pod   v1.PodStatus `json:"pod,omitempty"`
 	State string       `json:"state,omitempty"`
 	Error string       `json:"error,omitempty"`
+	// ContainerID is the observed ID of the container running this Task in a shared Pod.
+	// A change indicates the process was restarted.
+	// +optional
+	ContainerID string `json:"containerID,omitempty"`
 	// +listType=map
 	// +listMapKey=type
 	// +optional

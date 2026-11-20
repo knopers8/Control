@@ -49,6 +49,8 @@ spec:
                     properties:
                       name:
                         type: string
+                      podGroup:
+                        type: string
                       spec:
                         properties:
                           arguments:
@@ -4101,6 +4103,8 @@ spec:
                       name:
                         type: string
                       nameSuffix:
+                        type: string
+                      podGroup:
                         type: string
                       taskID:
                         type: string

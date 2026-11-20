@@ -133,6 +133,7 @@ func setDefaults() error {
 	viper.SetDefault("kubeNamespace", "alice-tasks")
 	viper.SetDefault("kubeConfig", "/home/aliecs/.kube/config")
 	viper.SetDefault("jitK8sBasePort", uint16(32000))
+	viper.SetDefault("k8sPodGroup", "")
 	return nil
 }
 
@@ -208,6 +209,7 @@ func setFlags() error {
 	pflag.String("kubeNamespace", viper.GetString("kubeNamespace"), "Kubernetes namespace in which ECS creates Task and Environment objects")
 	pflag.String("kubeConfig", viper.GetString("kubeConfig"), "Path to the kubeconfig used to access the Kubernetes cluster (empty uses in-cluster config)")
 	pflag.Uint16("jitK8sBasePort", viper.GetUint16("jitK8sBasePort"), "First control port to allocate for JIT tasks on Kubernetes, incremented per-node")
+	pflag.String("k8sPodGroup", viper.GetString("k8sPodGroup"), "If non-empty, all Kubernetes tasks of an environment on the same node are run as containers of one shared Pod belonging to this group, instead of one Pod per task")
 
 	pflag.Parse()
 	return viper.BindPFlags(pflag.CommandLine)

@@ -117,6 +117,8 @@ spec:
                   - type
                   type: object
                 type: array
+              containerName:
+                type: string
               control:
                 properties:
                   mode:
@@ -3917,6 +3919,8 @@ spec:
                 required:
                 - containers
                 type: object
+              podName:
+                type: string
               properties:
                 additionalProperties:
                   type: string
@@ -3970,6 +3974,8 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              containerID:
+                type: string
               error:
                 type: string
               pod:

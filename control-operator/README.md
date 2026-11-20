@@ -16,6 +16,30 @@ The operator is split into two separate binaries with different deployment strat
 
 **environment-manager** runs as a Deployment with a single replica per cluster. It is responsible for `Environment` resources which are cluster-scoped and not tied to a specific node.
 
+## Pod grouping
+
+By default every `Task` gets its own Pod, created by the task-manager. Setting `podGroup` on a task reference
+(`taskTemplates.tasks[node][]`) or a task definition (`spec.tasks[node][]`) of an `Environment` makes the task
+run as a separate container of a Pod **shared** with the other tasks of the same Environment, node and `podGroup`.
+Tasks with an empty `podGroup` are unaffected, so both modes can be mixed in one Environment.
+See [ecs-manifests/environment/test_env_shared.yaml](ecs-manifests/environment/test_env_shared.yaml).
+
+- The environment-manager builds and creates the shared Pods (`aliecs-pod-<environment>-<node>-<group>`) and owns them,
+  together with the Tasks. Task templates in one group must agree on the Pod-level settings (hostNetwork, hostIPC,
+  securityContext, ...) and must have exactly one container each. Volumes (and init containers) are merged by name and must
+  be identical when they share a name. The Pod gets the longest `terminationGracePeriodSeconds` and `restartPolicy: Never`.
+  An invalid group is reported as a `PodsCreated=False` condition on the Environment.
+- The task-manager never creates or deletes a shared Pod. A Task points to it with `spec.podName` / `spec.containerName`,
+  waits for its own container to run, talks OCC to the Pod IP as usual and only looks at the status of its own container
+  when detecting failures. `status.containerID` records which container instance it is connected to.
+- Teardown is ordered by the environment-manager: Tasks are deleted first (each one steps its process down to standby via
+  OCC and removes its finalizer), and only then the Pod is deleted. Containers cannot have finalizers, and a finalizer on a Pod
+  does not keep the kubelet from killing its containers, which is why the ordering is done this way.
+- Restarting a single Task of a shared Pod is not supported yet (the Pod has `restartPolicy: Never`); a failed container
+  puts only its own Task into `error`.
+- ECS can switch this on for all Kubernetes tasks with the `k8sPodGroup` configuration key (e.g. `--k8sPodGroup dataflow`).
+  Note that the root module vendors the operator API, run `go mod vendor` after changing it.
+
 ## Getting Started
 
 You’ll need a Kubernetes cluster to run against. You can use [KIND](https://sigs.k8s.io/kind) to get a local cluster for testing, or run against a remote cluster. The author had the most success with K3s ([see](/docs/kubernetes_ecs.md)).

@@ -44,8 +44,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	aliecsv1alpha1 "github.com/AliceO2Group/Control/control-operator/api/v1alpha1"
 	"github.com/go-logr/logr"
@@ -103,13 +105,19 @@ func (r *TaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	// Get existing pod or create new one, Reconciler owns the pod, so all changes to the pod and task will trigger
 	// reconciliation
 	// TODO: make this function
+	shared := isSharedPodTask(t)
 	existingPod := &v1.Pod{}
 	err := r.Get(ctx, types.NamespacedName{
-		Name:      podNameFromTask(t.Name),
+		Name:      podNameForTask(t),
 		Namespace: t.Namespace,
 	}, existingPod)
 	if err != nil {
 		if errors.IsNotFound(err) {
+			if shared {
+				// the Environment controller owns the shared Pod, we only wait for it (see Pod watch)
+				log.Info("shared Pod doesn't exist yet", "pod", t.Spec.PodName)
+				return ctrl.Result{}, nil
+			}
 			pod := r.podForTask(t)
 			log.Info("Creating a new Pod", "Pod.Namespace", pod.Namespace, "Pod.Name", pod.Name)
 			if err = r.Create(ctx, pod); err != nil {
@@ -120,7 +128,14 @@ func (r *TaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		return ctrl.Result{}, err
 	}
 
-	if failed, reason := isPodFailed(existingPod); failed {
+	var failed bool
+	var reason string
+	if shared {
+		failed, reason = isContainerFailed(existingPod, t.Spec.ContainerName)
+	} else {
+		failed, reason = isPodFailed(existingPod)
+	}
+	if failed {
 		if t.Status.State != "error" {
 			log.Info("Pod failure detected, setting Task state to error", "reason", reason)
 			t.Status.State = "error"
@@ -135,6 +150,25 @@ func (r *TaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		}
 		// Always stop reconciliation if the Pod is in a failed state
 		return ctrl.Result{}, nil
+	}
+
+	if shared {
+		cs := containerStatusByName(existingPod.Status.ContainerStatuses, t.Spec.ContainerName)
+		if cs == nil || cs.State.Running == nil {
+			log.Info("container of shared Pod is not running yet", "container", t.Spec.ContainerName)
+			return ctrl.Result{}, nil
+		}
+		if t.Status.ContainerID != cs.ContainerID {
+			if t.Status.ContainerID != "" {
+				// the process was restarted: forget the connection and the state we knew
+				log.Info("container ID changed, resetting connection", "old", t.Status.ContainerID, "new", cs.ContainerID)
+				r.cleargRPC(t, log)
+				t.Status.State = ""
+			}
+			t.Status.ContainerID = cs.ContainerID
+			// the status update triggers a new reconciliation
+			return ctrl.Result{}, r.Status().Update(ctx, t)
+		}
 	}
 
 	if _, exists := clientsForContainers.Load(t.Name); !exists {
@@ -312,6 +346,15 @@ func (r *TaskReconciler) handleFinalizer(ctx context.Context, t *aliecsv1alpha1.
 	}
 
 	log.Info("Finalizer found, starting cleanup")
+	if isSharedPodTask(t) {
+		// The Pod is shared and owned by the Environment, which deletes it only after all Tasks are gone.
+		// Our job is to bring our process down gracefully via OCC.
+		r.teardownOCC(ctx, t, log)
+		r.cleargRPC(t, log)
+		controllerutil.RemoveFinalizer(t, taskFinalizer)
+		return ctrl.Result{}, true, r.Update(ctx, t)
+	}
+
 	r.cleargRPC(t, log)
 
 	if podDeleted, err := r.deletePod(ctx, t, log); err != nil || !podDeleted {
@@ -344,6 +387,51 @@ func (r *TaskReconciler) deletePod(ctx context.Context, t *aliecsv1alpha1.Task, 
 	return false, nil
 }
 
+// occTeardownTimeout bounds the time spent on bringing a Task's process down via OCC when it is being deleted.
+const occTeardownTimeout = 10 * time.Second
+
+// teardownOCC is best effort: it steps the process down to standby (running -> configured -> standby)
+// before its container is killed together with the shared Pod. Failures are only logged, as
+// the Pod deletion will terminate the process anyway.
+func (r *TaskReconciler) teardownOCC(ctx context.Context, t *aliecsv1alpha1.Task, log logr.Logger) {
+	clientAny, exists := clientsForContainers.Load(t.Name)
+	if !exists || t.Status.State == "error" {
+		return
+	}
+	occClient := clientAny.(*OccClient)
+
+	ctx, cancel := context.WithTimeout(ctx, occTeardownTimeout)
+	defer cancel()
+
+	for range 2 {
+		reply, err := occClient.GetState(ctx)
+		if err != nil {
+			log.Info("OCC teardown: failed to get state", "error", err.Error())
+			return
+		}
+		state := strings.ToLower(reply.GetState())
+		var next string
+		switch state {
+		case "running":
+			next = "configured"
+		case "configured":
+			next = "standby"
+		default:
+			return
+		}
+
+		if t.Spec.Control.Mode == "fairmq" {
+			_, err = occClient.FairMQTransitionRequest(ctx, state, next, t.Spec.Arguments)
+		} else {
+			_, err = occClient.TransitionRequest(ctx, state, next, t.Spec.Arguments)
+		}
+		if err != nil {
+			log.Info("OCC teardown: transition failed", "from", state, "to", next, "error", err.Error())
+			return
+		}
+	}
+}
+
 func (*TaskReconciler) cleargRPC(t *aliecsv1alpha1.Task, log logr.Logger) {
 	if client, exists := clientsForContainers.Load(t.Name); exists {
 		log.Info("Cleaning up gRPC connection")
@@ -357,6 +445,28 @@ func (*TaskReconciler) cleargRPC(t *aliecsv1alpha1.Task, log logr.Logger) {
 
 func podNameFromTask(name string) string {
 	return fmt.Sprintf("aliecs-task-pod-%s", name)
+}
+
+// isSharedPodTask tells whether the Task runs in a Pod shared with other Tasks and owned by the Environment.
+func isSharedPodTask(t *aliecsv1alpha1.Task) bool {
+	return t.Spec.PodName != ""
+}
+
+// podNameForTask returns the name of the Pod the Task runs in: either shared or its own.
+func podNameForTask(t *aliecsv1alpha1.Task) string {
+	if isSharedPodTask(t) {
+		return t.Spec.PodName
+	}
+	return podNameFromTask(t.Name)
+}
+
+func containerStatusByName(statuses []v1.ContainerStatus, name string) *v1.ContainerStatus {
+	for i := range statuses {
+		if statuses[i].Name == name {
+			return &statuses[i]
+		}
+	}
+	return nil
 }
 
 func (r *TaskReconciler) podForTask(t *aliecsv1alpha1.Task) *v1.Pod {
@@ -422,6 +532,47 @@ func isPodFailed(pod *v1.Pod) (bool, string) {
 	return false, ""
 }
 
+// isContainerFailed is the shared Pod variant of isPodFailed: failures of other containers
+// of the Pod are ignored, only the named container (and init containers, which affect everyone) count.
+func isContainerFailed(pod *v1.Pod, containerName string) (bool, string) {
+	view := &v1.Pod{}
+	view.Status.InitContainerStatuses = pod.Status.InitContainerStatuses
+	if cs := containerStatusByName(pod.Status.ContainerStatuses, containerName); cs != nil {
+		view.Status.ContainerStatuses = []v1.ContainerStatus{*cs}
+	}
+
+	// Pod phase Failed means that all containers are done and at least one failed, but not necessarily ours.
+	if pod.Status.Phase == v1.PodFailed {
+		cs := containerStatusByName(pod.Status.ContainerStatuses, containerName)
+		if cs == nil || cs.State.Terminated == nil || cs.State.Terminated.ExitCode != 0 {
+			return true, fmt.Sprintf("Pod failed: %s", pod.Status.Reason)
+		}
+	}
+	return isPodFailed(view)
+}
+
+// sharedPodTaskRequests maps a Pod hosting Tasks of this node to reconcile requests of those Tasks.
+func (r *TaskReconciler) sharedPodTaskRequests(ctx context.Context, obj client.Object) []reconcile.Request {
+	pod, ok := obj.(*v1.Pod)
+	if !ok || pod.Labels[labelSharedPod] != "true" || pod.Spec.NodeName != r.NodeName {
+		return nil
+	}
+
+	tasks := &aliecsv1alpha1.TaskList{}
+	if err := r.List(ctx, tasks, client.InNamespace(pod.Namespace), client.MatchingLabels{labelTaskPod: pod.Name}); err != nil {
+		logf.FromContext(ctx).Error(err, "failed to list tasks of shared pod", "pod", pod.Name)
+		return nil
+	}
+
+	requests := make([]reconcile.Request, 0, len(tasks.Items))
+	for _, task := range tasks.Items {
+		if task.Spec.NodeName == r.NodeName {
+			requests = append(requests, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&task)})
+		}
+	}
+	return requests
+}
+
 // SetupWithManager sets up the controller with the Manager.
 func (r *TaskReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
@@ -435,6 +586,8 @@ func (r *TaskReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			}),
 		)).
 		Owns(&v1.Pod{}).
+		// shared Pods are owned by the Environment, so Tasks are found via the label set on them
+		Watches(&v1.Pod{}, handler.EnqueueRequestsFromMapFunc(r.sharedPodTaskRequests)).
 		WithOptions(controller.Options{MaxConcurrentReconciles: r.MaxConcurrentReconciles}).
 		Complete(r)
 }
