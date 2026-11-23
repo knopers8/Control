@@ -12,7 +12,6 @@ spec:
     - O2_ROLE
   pod:
     hostNetwork: true
-    hostIPC: true
     securityContext:
       fsGroup: 1100
       supplementalGroups: [10, 1105]
@@ -25,7 +24,7 @@ spec:
           runAsUser: 1100
           runAsGroup: 1100
         volumeMounts:
-          - name: host-shm
+          - name: shm
             mountPath: /dev/shm
           - name: group
             mountPath: /etc/group
@@ -39,10 +38,10 @@ spec:
             mountPath: /lib/modules
         imagePullPolicy: IfNotPresent
     volumes:
-      - name: host-shm
-        hostPath:
-          path: /dev/shm
-          type: Directory
+      - name: shm
+        emptyDir:
+          medium: Memory
+          sizeLimit: 8Gi
       - name: group
         hostPath:
           path: /etc/group
